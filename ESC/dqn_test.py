@@ -74,19 +74,9 @@ if __name__=="__main__":
     np.random.seed(args.seed)
     args.Loadmodel=True
     args.ModelIdex=64000
+    args.render=True
     model = DQN_Agent(args)
     if args.Loadmodel: model.load(algo_name,BriefEnvName[args.EnvIdex],args.ModelIdex)
     score = all_evaluate_policy(eval_env,  True,model, 1)
     print(score)
-    #1279，3085未进入终点
-    #410碰撞2268
-    #2015超车未进入
-
-    #成功3088
-
-    #410复杂环境碰撞
-    #986速度体现
-    #2268未停止，选择超车
-    #3345未停止
-    #2015超车未进入        23
-
+    #159 116 94 155 37

@@ -23,7 +23,6 @@ class MotionState:
     def __str__(self):
         return "MotionState: " + str(self.__dict__)
 
-
 class Track:
     def __init__(self, id):
         # assert isinstance(id, int)
@@ -51,15 +50,16 @@ add_arguments(argparser)
 args = argparser.parse_args()
 
 if __name__=="__main__":
-
-    BriefEnvName = ['MyCar']
+    if args.use_ESC:
+        BriefEnvName = ['ESC-DDQN-CILQR']
+    else:
+        BriefEnvName = ['DDQN-CILQR']
     Env_With_DW = [True] #DW: Die or Win
     args.env_with_dw = Env_With_DW[args.EnvIdex]
     env = Env(args)
     eval_env = Env(args)
     args.state_dim = env.observation_space.shape[0]
     args.action_dim = env.action_space.n
-    # print(args.action_dim)
     args.max_e_steps = env._max_episode_steps
     #Use DDQN or DQN
     if args.DDQN: algo_name = 'DDQN'
@@ -121,14 +121,7 @@ if __name__=="__main__":
                         model.train(buffer)
 
                 '''record & log'''
-                # if (total_steps) % args.eval_interval == 0:
-                #     model.exp_noise *= args.noise_decay
-                #     score = evaluate_policy(eval_env, model, render=False)
-                #     if args.write:
-                #         writer.add_scalar('ep_r', score, global_step=total_steps)
-                #         writer.add_scalar('noise', model.exp_noise, global_step=total_steps)
-                #     print('EnvName:', BriefEnvName[args.EnvIdex], 'seed:', args.seed, 'steps: {}'.format(total_steps),
-                #           'score:', int(score))
+
                 total_steps += 1
 
                 '''save model'''

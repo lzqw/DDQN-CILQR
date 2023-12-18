@@ -4,14 +4,7 @@ from RL_method.utils import str2bool
 
 
 def add_arguments(parser):
-    parser.add_argument('--use_esc', action="store_true", default=True,
-                        help='None')
-    parser.add_argument('--obs_dis', type=float, default=20,
-                        help='None')
-    parser.add_argument('--obs_num', type=int, default=15,
-                        help='None')
-    parser.add_argument('--car_dim', type=int, default=4,
-                        help='None')
+
 
     # ___________________ Carla Parameters ___________________ #
     parser.add_argument('--add_npc_agents', action="store_true", default=False,
@@ -101,8 +94,8 @@ def add_arguments(parser):
     parser.add_argument('--EnvIdex', type=int, default=0, help='my-env, CP-v1, LLd-v2')
     parser.add_argument('--write', type=str2bool, default=True, help='Use SummaryWriter to record the training')
     parser.add_argument('--render', type=str2bool, default=False, help='Render or Not')
-    parser.add_argument('--Loadmodel', type=str2bool, default=True, help='Load pretrained model or Not')
-    parser.add_argument('--ModelIdex', type=int, default=64000, help='which model to load')
+    parser.add_argument('--Loadmodel', type=str2bool, default=False, help='Load pretrained model or Not')
+    parser.add_argument('--ModelIdex', type=int, default=30800, help='which model to load')
     parser.add_argument('--seed', type=int, default=0, help='random seed')
     parser.add_argument('--Max_train_steps', type=int, default=1e6, help='Max training steps')
     parser.add_argument('--save_interval', type=int, default=2000, help='Model saving interval, in steps.')
@@ -126,7 +119,15 @@ def add_arguments(parser):
     parser.add_argument('--sim_time', type=int, default=500)
     parser.add_argument('--ego_id', type=int, default=121)
 
-
+    parser.add_argument('--predefine_id',type=bool, default=True)
+    parser.add_argument('--senerio_index',type=list,default=[159,116,94,155,37])
+    parser.add_argument('--use_ESC',type=bool,default=False)
+    parser.add_argument('--ESC_embedding',type=int,default=128)
+    parser.add_argument('--ESC_max_agent',type=int,default=10)
+    parser.add_argument('--obs_dis', type=float, default=20,
+                        help='None')
+    parser.add_argument('--car_dim', type=int, default=4,
+                        help='None')
 
 
 

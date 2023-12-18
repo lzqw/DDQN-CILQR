@@ -7,10 +7,9 @@ from torch.distributions import Normal
 import math
 import os
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-print(device)
 
 def process(s,s_net,args,device):
-    obs=torch.zeros((s.shape[0],args.car_dim*args.obs_num+1+args.car_dim), dtype=torch.float).to(device)
+    obs=torch.zeros((s.shape[0],args.car_dim*args.ESC_max_agent+1+args.car_dim), dtype=torch.float).to(device)
     for index in range(s.shape[0]):
         s_per=s[index]
         s_per=s_per[s_per!=-1]
@@ -29,53 +28,92 @@ def build_net(layer_shape, activation, output_activation):
         layers += [nn.Linear(layer_shape[j], layer_shape[j + 1]), act()]
     return nn.Sequential(*layers)
 
-
 class Q_Net(nn.Module):
-    def __init__(self, state_dim, action_dim, hid_shape,args):
+    def __init__(self, args,action_dim,hid_shape):
         super(Q_Net, self).__init__()
-        layers = [args.car_dim*args.obs_num+1+args.car_dim] + list(hid_shape) + [action_dim]
-        self.Q = build_net(layers, nn.ReLU, nn.Identity)
-
-    def forward(self, s):
-        q = self.Q(s)
-        return q
-
-class S_Net(nn.Module):
-    def __init__(self, args):
-        super(S_Net, self).__init__()
         self.args=args
-        self.hidden1=nn.Sequential(
-                nn.Linear(in_features=args.car_dim,out_features=256,bias=True),
-                nn.GELU())
-        self.hidden2=nn.Sequential(
-                nn.Linear(in_features=256,out_features=256,bias=True),
-                nn.GELU())
-        self.hidden3=nn.Sequential(
-                nn.Linear(in_features=256,out_features=256,bias=True),
-                nn.GELU())
-        self.hidden4=nn.Sequential(
-                nn.Linear(in_features=256,out_features=args.car_dim*args.obs_num+1,bias=True),
-                nn.GELU())
+        self.s_net_hidden1 = nn.Sequential(
+            nn.Linear(in_features=self.args.car_dim, out_features=hid_shape, bias=True),
+            nn.ReLU())
+        self.s_net_hidden2 = nn.Sequential(
+            nn.Linear(in_features=hid_shape, out_features=1+self.args.car_dim*self.args.ESC_max_agent, bias=True),
+            nn.ReLU())
 
+        if self.args.use_ESC:
+            layers = [1+self.args.car_dim+self.args.car_dim*self.args.ESC_max_agent] + [hid_shape] + [action_dim]
+        else:
+            layers = [(1+self.args.K)*self.args.car_dim] + [hid_shape] + [action_dim]
+        self.Q = build_net(layers, nn.ReLU, nn.Identity)
     def forward(self, s):
+        if self.args.use_ESC:
+            self_state_length = self.args.car_dim
+            num_states = (s.shape[1] - self_state_length) // self.args.car_dim
+            self_states = s[:, :self_state_length]  # 提取自身车辆状态
+            surrounding_states = s[:, self_state_length:].view(-1, num_states, self.args.car_dim)  # 提取周围车辆状态
+
+            batch_size = s.shape[0]
+            sum_outputs = torch.zeros(batch_size, 1+self.args.car_dim*self.args.ESC_max_agent).to(s.device)  # 初始化输出和的张量
+            for i in range(batch_size):
+                for j in range(num_states):
+                    state = surrounding_states[i, j]
+                    if -1 not in state:  # 检查状态是否有效（不包含 -1）
+                        output = self.s_net_hidden1(state.unsqueeze(0))  # 应用 s_net_hidden1
+                        output = self.s_net_hidden2(output)  # 应用 s_net_hidden2
+                        sum_outputs[i] += output.squeeze(0)  # 累加输出
+
+            # 拼接自身车辆状态与周围车辆状态的加和
+            s = torch.cat((self_states, sum_outputs), dim=1)
         # s = s.reshape((-1, self.args.car_dim))
-        s=self.hidden1(s)
-        s=self.hidden2(s)
-        s=self.hidden3(s)
-        o=self.hidden4(s)
+        o=self.Q(s)
         return o
+
+
+# class Q_Net(nn.Module):
+#     def __init__(self, state_dim, action_dim, hid_shape,args):
+#         super(Q_Net, self).__init__()
+#         layers = [args.car_dim*args.ESC_max_agent+1+args.car_dim] + list(hid_shape) + [action_dim]
+#         self.Q = build_net(layers, nn.ReLU, nn.Identity)
+#
+#     def forward(self, s):
+#         q = self.Q(s)
+#         return q
+
+# class S_Net(nn.Module):
+#     def __init__(self, args):
+#         super(S_Net, self).__init__()
+#         self.args=args
+#         self.hidden1=nn.Sequential(
+#                 nn.Linear(in_features=args.car_dim,out_features=256,bias=True),
+#                 nn.ReLU())
+#         # self.hidden2=nn.Sequential(
+#         #         nn.Linear(in_features=256,out_features=256,bias=True),
+#         #         nn.ReLU())
+#         self.hidden2=nn.Sequential(
+#                 nn.Linear(in_features=256,out_features=args.car_dim*args.ESC_max_agent+1,bias=True),
+#                 nn.ReLU())
+#
+#     def forward(self, s):
+#         # s = s.reshape((-1, self.args.car_dim))
+#         s=self.hidden1(s)
+#         o=self.hidden2(s)
+#         return o
 
 
 class DQN_Agent(object):
     def __init__(self, opt, ):
         self.opt=opt
-        self.q_net = Q_Net(opt.state_dim, opt.action_dim, (opt.net_width, opt.net_width),opt).to(device)
-        self.s_net=S_Net(opt).to(device)
+
+        self.q_net = Q_Net(opt, opt.action_dim,opt.net_width).to(device)
         self.q_net_optimizer = torch.optim.Adam(self.q_net.parameters(), lr=opt.lr)
-        self.s_net_optimizer = torch.optim.Adam(self.s_net.parameters(), lr=opt.lr)
+
+        # self.s_net=S_Net(opt).to(device)
+        # self.s_net_optimizer = torch.optim.Adam(self.s_net.parameters(), lr=opt.lr)
+
         self.q_target = copy.deepcopy(self.q_net)
+        # self.s_target = copy.deepcopy(self.s_net)
         # Freeze target networks with respect to optimizers (only update via polyak averaging)
         for p in self.q_target.parameters(): p.requires_grad = False
+        # for s in self.s_target.parameters(): s.requires_grad = False
         self.env_with_dw = opt.env_with_dw
         self.gamma = opt.gamma
         self.tau = 0.0058
@@ -87,7 +125,8 @@ class DQN_Agent(object):
     def select_action(self, state, deterministic):  # only used when interact with the env
         with torch.no_grad():
             state = torch.FloatTensor(state.reshape(1, -1)).to(device)
-            state=process(state,self.s_net,self.opt,device)
+            # if self.opt.use_ESC:
+            #     state=process(state,self.s_net,self.opt,device)
             if deterministic:
                 a = self.q_net(state).argmax().item()
             else:
@@ -99,8 +138,8 @@ class DQN_Agent(object):
 
     def train(self, replay_buffer):
         s, a, r, s_prime, dw_mask = replay_buffer.sample(self.batch_size)
-        s_prime=process(s_prime,self.s_net,self.opt,device)
-        s=process(s,self.s_net,self.opt,device)
+        # s_prime=process(s_prime,self.s_net,self.opt,device)
+        # s=process(s,self.s_net,self.opt,device)
         '''Compute the target Q value'''
         with torch.no_grad():
             if self.DDQN:
@@ -121,10 +160,10 @@ class DQN_Agent(object):
 
         q_loss = F.mse_loss(current_q_a, target_Q)
         self.q_net_optimizer.zero_grad()
-        self.s_net_optimizer.zero_grad()
+        # self.s_net_optimizer.zero_grad()
         q_loss.backward()
         self.q_net_optimizer.step()
-        self.s_net_optimizer.step()
+        # self.s_net_optimizer.step()
 
         # Update the frozen target models
         for param, target_param in zip(self.q_net.parameters(), self.q_target.parameters()):
@@ -132,12 +171,13 @@ class DQN_Agent(object):
 
     def save(self, algo, EnvName, steps):
         torch.save(self.q_net.state_dict(), "./model/{}_{}_{}.pth".format(algo, EnvName, steps))
-        torch.save(self.s_net.state_dict(), "./model/{}_{}_{}_s.pth".format(algo, EnvName, steps))
+        # torch.save(self.s_net.state_dict(), "./model/{}_{}_{}_s.pth".format(algo, EnvName, steps))
 
     def load(self, algo, EnvName, steps):
         self.q_net.load_state_dict(torch.load("./model/{}_{}_{}.pth".format(algo, EnvName, steps)))
         self.q_target.load_state_dict(torch.load("./model/{}_{}_{}.pth".format(algo, EnvName, steps)))
-        self.s_net.load_state_dict(torch.load("./model/{}_{}_{}_s.pth".format(algo, EnvName, steps)))
+        # self.s_net.load_state_dict(torch.load("./model/{}_{}_{}_s.pth".format(algo, EnvName, steps)))
+        # self.s_target.load_state_dict(torch.load("./model/{}_{}_{}_s.pth".format(algo, EnvName, steps)))
 
 
 class ReplayBuffer(object):
@@ -147,12 +187,12 @@ class ReplayBuffer(object):
         self.ptr = 0
         self.size = 0
 
-        if self.args.use_esc==False:
+        if self.args.use_ESC==False:
             self.state = np.zeros((max_size, self.args.state_dim))
             self.next_state = np.zeros((max_size, self.args.state_dim))
         else:
-            self.state = -1*np.ones((max_size, self.args.obs_num*4))
-            self.next_state = -1*np.ones((max_size, self.args.obs_num*4))
+            self.state = -1*np.ones((max_size, self.args.ESC_max_agent*4))
+            self.next_state = -1*np.ones((max_size, self.args.ESC_max_agent*4))
 
         self.dw = np.zeros((max_size, 1))
         self.action = np.zeros((max_size, 1))
@@ -163,7 +203,7 @@ class ReplayBuffer(object):
 
         self.action[self.ptr] = action
         self.reward[self.ptr] = reward
-        if self.args.use_esc==False:
+        if self.args.use_ESC==False:
             self.state[self.ptr] = state
             self.next_state[self.ptr] = next_state
         else:

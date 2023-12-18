@@ -23,58 +23,25 @@ def evaluate_policy(env, model, render, turns = 3):
 
 def all_evaluate_policy(env,  render, model,turns=3):
     scores = 0
-    r = []
-    #57  57
-    keys = list(env.track_dictionary.keys())
-    keys=[41]
-    # keys=[32,134,
-    # 36,
-    # 163,
-    # 41,
-    # 55,
-    # 63,
-    # 65,
-    # 71,
-    # 91,
-    # 96,
-    # 98,
-    # 102,
-    # 103,
-    # 105]
-
-    # with open("new_result.txt") as content:
-    #     content = content.read()
-    #     content = content.split("\n")
-    # fail = []
-    # for i in content:
-    #     if i[0:5] == 'coll ':
-    #         fail.append(int(i[5:].strip(' ')))
-    #     if i[0:4] == 'end ':
-    #         fail.append(int(i[4:].strip(' ')))
-    # fail=list(set(fail))
     coll=[]
     v=[]
-    for j in keys:
-        env.args.ego_id=57
-        s, done, ep_r, steps = env.reset(), False, 0, 0
-        while not done:
-            # Take deterministic actions at test time
-            a = model.select_action(s, deterministic=True)
-            a=a+3
-            # a = 9
-            s_prime, r, done, info = env.step(a)
-            if done==True and r<=-50:
-                coll.append(j)
-            ep_r += r
-            steps += 1
-            v.append(s[2])
-            s = s_prime
+    env.args.ego_id=57
+    s, done, ep_r, steps = env.reset(), False, 0, 0
+    while not done:
+        # Take deterministic actions at test time
+        a = model.select_action(s, deterministic=True)
+        s_prime, r, done, info = env.step(a)
+        # if done==True and r<=-50:
+        #     coll.append(j)
+        ep_r += r
+        steps += 1
+        v.append(s[2])
+        s = s_prime
 
 
-        scores += ep_r
+    scores += ep_r
     print(v)
     coll=np.array(coll)
-    #np.savetxt(fname="data_4.csv", X=coll, fmt="%d", delimiter=",")
 
     return int(scores / turns)
 #You can just ignore this funciton. Is not related to the RL.

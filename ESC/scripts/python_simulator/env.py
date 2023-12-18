@@ -18,7 +18,7 @@ from sklearn.preprocessing import normalize
 import gym
 from gym import spaces
 # from gym.envs.classic_control import rendering
-
+from numpy.polynomial.polynomial import Polynomial
 # code for INTERACTION dataset
 from INTERACTION_Sim.INSim import get_item_iterator, draw_map_without_lanelet, polygon_xy_from_motionstate, mapsize
 
@@ -99,11 +99,20 @@ class Env(gym.Env):
         self.done = False
         self.map_file_path = os.path.join(sys.path[1], 'maps', args.map_name, 'maps', args.map_name + '.osm')
         self.action_space = spaces.Discrete(args.low_controller_num)
-        self.observation_space = spaces.Box(
-            np.tile(np.array([0., 0., -self.args.max_speed, self.args.steer_angle_limits[0]]), (1, self.K + 1))[0]
-            ,
-            np.tile(np.array([1., 1., self.args.max_speed, self.args.steer_angle_limits[1]]), (1, self.K + 1))[0]
-        )
+        low_limits = np.array([0., 0., -self.args.max_speed, self.args.steer_angle_limits[0]])
+        high_limits = np.array([1., 1., self.args.max_speed, self.args.steer_angle_limits[1]])
+
+        if self.args.use_ESC:
+            self.observation_space = spaces.Box(
+                np.tile(low_limits, (1, self.args.ESC_max_agent + 1))[0],
+                np.tile(high_limits, (1, self.args.ESC_max_agent + 1))[0]
+            )
+        else:
+            self.observation_space = spaces.Box(
+                np.tile(low_limits, (1, self.K + 1))[0]
+                ,
+                np.tile(high_limits, (1, self.K + 1))[0]
+            )
         self._max_episode_steps = self.args.sim_time
 
         """init in track_init() function"""
@@ -134,8 +143,8 @@ class Env(gym.Env):
         self.npc_plan_plot = None
 
         """init in reward"""
-        self.end_distance=2
-        self.count=0
+        self.end_distance = 2
+        self.count = 0
 
         """init in get_k_npc() function"""
         self.navigation_agent = None
@@ -148,7 +157,7 @@ class Env(gym.Env):
     def track_init(self):
 
         """Track loading"""
-        self.track_dictionary = np.load('./maps/DR_USA_Intersection_MA/track.npy',
+        self.track_dictionary = np.load('/home/lzqw/PycharmProjects/DDQN-CILQR/ESC/maps/DR_USA_Intersection_MA/track.npy',
                                         allow_pickle=True).item()
         self.timestamp_min = 1e9
         self.timestamp_max = 0
@@ -208,68 +217,43 @@ class Env(gym.Env):
         self.last_ego_states = np.array([self.current_ego_state[0], self.current_ego_state[1]])
         self.end_state = np.array(
             [end_state.x, end_state.y, (end_state.vx ** 2 + end_state.vy ** 2) ** 0.5, end_state.psi_rad])
-	
+
         self.min_x, self.min_y, self.max_x, self.max_y = mapsize(self.map_file_path, 0.0, 0.0)
 
     def get_k_npc(self):  # 3678
-        """get the k-nearest vehicles"""
-        dis_list = []  # distance between ego and surrounding
-        id_list = []  # id of surrounding vehicles
-        ms_list = []  # motion state of surrounding vehicles
-        self.id_k = []  # id of k-nearest vehicles
+        dis_list, id_list, ms_list = [], [], []
+        self.id_k, self.k_NPC_states = [], []
 
-        # get dis,id,ms
         for key, value in self.track_dictionary.items():
-            if key != self.ego_id:
-                if value.time_stamp_ms_first <= self.timestamp <= value.time_stamp_ms_last:
-                    ms = value.motion_states[self.timestamp]
-                    dis = np.linalg.norm(np.array([ms.x, ms.y]) - self.current_ego_state[0:2])
-                    id_list.append(key)
-                    dis_list.append(dis)
-                    ms_list.append((ms))
+            if key != self.ego_id and value.time_stamp_ms_first <= self.timestamp <= value.time_stamp_ms_last:
+                ms = value.motion_states[self.timestamp]
+                dis_list.append(np.linalg.norm(np.array([ms.x, ms.y]) - self.current_ego_state[0:2]))
+                id_list.append(key)
+                ms_list.append((ms))
 
-        # get the k-nearest vehicles
-        if self.args.use_esc==False:
-            min_index = map(dis_list.index, heapq.nsmallest(self.K, dis_list))
-        else:
-            min_index=[]
-            if len(id_list)!=0:
-                for index in range(len(id_list)):
-                    if dis_list[index]<=self.args.obs_dis:
-                        min_index.append(index)
+        min_index = [i for i, dis in enumerate(dis_list) if dis <= self.args.obs_dis] if self.args.use_ESC else map(
+            dis_list.index, heapq.nsmallest(self.K, dis_list))
 
-        self.k_NPC_states = []
         for i in list(min_index):
             self.id_k.append(id_list[i])
             ms = ms_list[i]
             init_state = np.array([ms.x, ms.y, np.linalg.norm([ms.vx, ms.vy]), ms.psi_rad])
-            NPCstates = []
-            NPCstates.append(init_state)
+            NPCstates = [init_state]
             max_t = self.track_dictionary[id_list[i]].time_stamp_ms_last
             for j in range(self.args.horizon):
                 t = self.timestamp + (j + 1) * 100
-                if t <= max_t:
-                    ms_t = self.track_dictionary[id_list[i]].motion_states[t]
-                    next_state = np.array([ms_t.x, ms_t.y, np.linalg.norm([ms_t.vx, ms_t.vy]), ms_t.psi_rad])
-                    NPCstates.append(next_state)
-                else:
-                    ms_t = self.track_dictionary[id_list[i]].motion_states[max_t]
-                    ms_ttms_t = self.track_dictionary[id_list[i]].motion_states[max_t - 100]
-                    dx = ms_t.x - ms_ttms_t.x
-                    dy = ms_t.y - ms_ttms_t.y
-                    next_state = np.array([ms_t.x + dx, ms_t.y + dy, np.linalg.norm([ms_t.vx, ms_t.vy]), ms_t.psi_rad])
-                    NPCstates.append(next_state)
-            NPCstates = np.array(NPCstates).T  # 4,21
-            self.k_NPC_states.append(NPCstates)
+                ms_t = self.track_dictionary[id_list[i]].motion_states[min(t, max_t)]
+                next_state = np.array([ms_t.x, ms_t.y, np.linalg.norm([ms_t.vx, ms_t.vy]), ms_t.psi_rad])
+                NPCstates.append(next_state)
+            self.k_NPC_states.append(np.array(NPCstates).T)
 
         self.k_NPC_states = np.array(self.k_NPC_states)
         self.num_vehicles = self.k_NPC_states.shape[0]
-        if self.navigation_agent != None:
-            if self.navigation_agent.constraints.number_of_npc != self.k_NPC_states.shape[0]:
-                self.navigation_agent.constraints.set_k(self.k_NPC_states.shape[0])
+        if self.navigation_agent and self.navigation_agent.constraints.number_of_npc != self.num_vehicles:
+            self.navigation_agent.constraints.set_k(self.num_vehicles)
 
     def get_state(self):
-        if self.args.use_esc==False:
+        if self.args.use_ESC == False:
             if self.k_NPC_states.shape[0] != 0:
                 self.state = np.vstack((self.current_ego_state, self.k_NPC_states[:, :, 0]))
                 self.state[:, 0] = (self.state[:, 0] - self.min_x) / (self.max_x - self.min_x)
@@ -304,9 +288,9 @@ class Env(gym.Env):
         if np.linalg.norm(self.current_ego_state[0:2] - self.end_state[0:2]) <= self.end_distance:
             return True
         else:
-            x=self.current_ego_state[0]-self.ego_car_x[-20:]
+            x = self.current_ego_state[0] - self.ego_car_x[-20:]
             y = self.current_ego_state[1] - self.ego_car_y[-20:]
-            if np.min((x**2+y**2)**0.5)<=self.end_distance:
+            if np.min((x ** 2 + y ** 2) ** 0.5) <= self.end_distance:
                 return True
             return False
 
@@ -321,19 +305,19 @@ class Env(gym.Env):
         reward += self.current_ego_state[2] / 10
         reward += self.plan_dis_reward()
         if self.check_collision():
-            print('coll',self.ego_id)
+            print('coll', self.ego_id)
             reward -= 100
             self.done = True
         else:
             reward += 0.1
         if self.control[0] < self.args.acc_limits[0] or self.control[0] > self.args.acc_limits[1]:
             reward -= 100
-            print('acc',self.ego_id)
+            print('acc', self.ego_id)
             self.done = True
         else:
             reward += 0.1
         if self.check_end():
-            print('end',self.ego_id)
+            print('end', self.ego_id)
             reward += 10
             self.done = True
         if self.count >= self.args.sim_time:
@@ -350,13 +334,13 @@ class Env(gym.Env):
         self.x_desired_plan = desired_path[:, 0]
         self.y_desired_plan = desired_path[:, 1]
 
-
-    def step(self,action):
-        self.a=action
+    def step(self, action):
+        self.a = action
         self.navigation_agent.constraints.args.desired_speed = action
         reward = 0
         for i in range(self.args.p_times):
-            self.render()
+            if self.args.render:
+                self.render()
             self.low_level_controller_step()
             reward += self.cal_reward()
             if self.done:
@@ -365,12 +349,11 @@ class Env(gym.Env):
 
         return self.state.flatten(), reward, self.done, None
 
-
     def render(self, mode='human', close=False):
         if close:
             pass
         if self.fig == None:
-            self.fig, self.axes = plt.subplots(1, 1)
+            self.fig, self.axes = plt.subplots(1, 1, figsize=(15, 15))
             lat_origin = 0.0
             lon_origin = 0.0
             # map_file_path=os.path.join(sys.path[1], 'maps', args.map_name, 'maps', args.map_name + '.osm')
@@ -459,7 +442,7 @@ class Env(gym.Env):
                     ms.psi_rad = self.current_ego_state[3]
                     self.patches_dict[key].set_xy(polygon_xy_from_motionstate(ms, width, length))
                     self.text_dict[key] = self.axes.text(ms.x, ms.y + 2,
-                                                         str(round(self.current_ego_state[2], 2)) + '(' +str(self.a)
+                                                         str(round(self.current_ego_state[2], 2)) + '(' + str(self.a)
                                                          + ')', horizontalalignment='center',
                                                          zorder=30)
         end_time = time.time()
@@ -467,11 +450,11 @@ class Env(gym.Env):
         if self.x_local_plan is not None:
             self.local_plan_plot.set_data(self.x_local_plan, self.y_local_plan)
             self.desired_plan_plot.set_data(self.x_desired_plan, self.y_desired_plan)
-            xx,yy=[],[]
+            xx, yy = [], []
             for i in range(self.k_NPC_states.shape[0]):
-                xx.extend(list(self.k_NPC_states[i,0,:]))
-                yy.extend(list(self.k_NPC_states[i,1,:]))
-            self.npc_plan_plot.set_data(xx,yy)
+                xx.extend(list(self.k_NPC_states[i, 0, :]))
+                yy.extend(list(self.k_NPC_states[i, 1, :]))
+            self.npc_plan_plot.set_data(xx, yy)
 
         diff_time = end_time - start_time
         plt.pause(max(0.001, 100 / 1000. - diff_time))
@@ -544,10 +527,11 @@ class Env(gym.Env):
         self.patches_dict = dict()
         self.text_dict = dict()
         self.npc_dict = dict()
-        plt.ion()
-        plt.pause(0.5)
-        plt.close()
-        plt.ioff()
+        if self.args.render:
+            plt.ion()
+            plt.pause(0.5)
+            plt.close()
+            plt.ioff()
 
         self.fig = None
         self.axes = None
@@ -572,8 +556,10 @@ if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description='CARLA CILQR')
     add_arguments(argparser)
     args = argparser.parse_args()
+    args.render=True
     pysim = Env(args)
     for i in range(2000):
         state, reward, done, _ = pysim.step(5)
+        print(state)
         if done == True:
-            pysim.reset()#986速度慢碰撞
+            pysim.reset()  # 986速度慢碰撞
